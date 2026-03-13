@@ -11,45 +11,50 @@ datasource db {
 }
 
 model Organizer {
-  id    Int    @id @default(autoincrement())
-  name  String
-  email String?
-  rooms AuctionRoom[]
+  id            Int           @id @default(autoincrement())
+  organizerCode String        @unique @db.VarChar(4)
+  name          String
+  email         String?
+  rooms         AuctionRoom[]
 }
 
 model AuctionRoom {
-  id           Int      @id @default(autoincrement())
-  roomName     String
-  organizerId  Int
-  organizer    Organizer @relation(fields: [organizerId], references: [id])
-  status       String   @default("waiting") // live, ended, waiting
-  items        Item[]
-  participants Participant[]
+  id            Int      @id @default(autoincrement())
+  roomName      String
+  organizerId   Int
+  organizer     Organizer @relation(fields: [organizerId], references: [id])
+  status        String   @default("waiting") // live, ended, waiting
+  currentItemId Int?     @unique
+  currentItem   Item?    @relation("CurrentItem", fields: [currentItemId], references: [id])
+  items         Item[]
+  participants  Participant[]
 }
 
 model Item {
-  id            Int      @id @default(autoincrement())
-  name          String
-  price         Float
-  currentBid    Float?
-  firstBid      Float?
-  winnerId      Int?
-  winner        Participant? @relation("Item_winner", fields: [winnerId], references: [id])
-  status        String   @default("unsold") // unsold, progress, sold
-  auctionRoomId Int
-  auctionRoom   AuctionRoom @relation(fields: [auctionRoomId], references: [id])
-  bids          Bid[]
+  id             Int      @id @default(autoincrement())
+  name           String
+  price          Float
+  currentBid     Float?
+  firstBid       Float?
+  winnerId       Int?
+  winner         Participant? @relation("Item_winner", fields: [winnerId], references: [id])
+  status         String   @default("upcoming") // upcoming, ongoing, sold, unsold
+  auctionRoomId  Int
+  auctionRoom    AuctionRoom @relation(fields: [auctionRoomId], references: [id])
+  currentInRoom  AuctionRoom? @relation("CurrentItem")
+  bids           Bid[]
 }
 
 model Participant {
-  id             Int      @id @default(autoincrement())
-  name           String
-  purseAmount    Float
-  remainingPurse Float
-  roomId         Int
-  auctionRoom    AuctionRoom @relation(fields: [roomId], references: [id])
-  bids           Bid[]
-  winningItems   Item[]   @relation("Item_winner")
+  id              Int      @id @default(autoincrement())
+  participantCode String   @unique @db.VarChar(6)
+  name            String
+  purseAmount     Float
+  remainingPurse  Float
+  roomId          Int
+  auctionRoom     AuctionRoom @relation(fields: [roomId], references: [id])
+  bids            Bid[]
+  winningItems    Item[]   @relation("Item_winner")
 }
 
 model Bid {

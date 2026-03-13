@@ -1,5 +1,5 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
+const { emitRoomUpdate } = require('./roomController');
 
 exports.addItem = async (req, res) => {
   const roomId = Number(req.params.roomId);
@@ -24,8 +24,10 @@ exports.addItem = async (req, res) => {
       price: parsedPrice,
       firstBid: parsedPrice,
       currentBid: parsedPrice,
+      status: 'upcoming',
       auctionRoomId: roomId,
     },
   });
+  await emitRoomUpdate(roomId);
   return res.status(201).json(item);
 };
