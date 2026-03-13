@@ -9,7 +9,7 @@ const { ensureDefaultOrganizer } = require('./controllers/organizerController');
 
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
@@ -29,6 +29,6 @@ ensureDefaultOrganizer().catch((error) => {
   console.error('Failed to ensure default organizer', error);
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on port ${PORT}`);
 });

@@ -1,6 +1,6 @@
 import React, { useEffect, useEffectEvent, useState } from 'react';
 
-const API_BASE_URL = 'http://localhost:4000/api';
+const API_BASE_URL = `http://${window.location.hostname}:4000/api`;
 
 export default function OrganizerDashboard({ organizer, onEnterRoom, onLogout }) {
   const [rooms, setRooms] = useState([]);
