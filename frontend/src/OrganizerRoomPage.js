@@ -106,30 +106,6 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
       }
       return next;
     });
-
-    setReassignByItemId((prev) => {
-      const next = { ...prev };
-      for (const item of room.items) {
-        if (next[item.id] == null) {
-          next[item.id] = item.status === 'upcoming'
-            ? 'upcoming'
-            : item.status === 'sold'
-              ? 'sold'
-              : 'unsold';
-        }
-      }
-      return next;
-    });
-
-    setReassignWinnerByItemId((prev) => {
-      const next = { ...prev };
-      for (const item of room.items) {
-        if (next[item.id] == null) {
-          next[item.id] = item.winnerId ?? '';
-        }
-      }
-      return next;
-    });
   }, [room]);
 
   async function handleControl(endpoint, payload, method = 'POST') {
