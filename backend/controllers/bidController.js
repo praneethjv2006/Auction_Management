@@ -1,5 +1,11 @@
 const prisma = require('../lib/prisma');
-const { getRoomSnapshot, emitRoomUpdate } = require('./roomController');
+const {
+  getRoomSnapshot,
+  emitRoomUpdate,
+  hasParticipantSkippedCurrentItem,
+} = require('./roomController');
+const { AuctionFactory } = require('../models/factory');
+const { processBidWithPatterns } = require('../models/bidFlow');
 
 exports.placeBid = async (req, res) => {
   const roomId = Number(req.params.roomId);
@@ -24,6 +30,9 @@ exports.placeBid = async (req, res) => {
 
   const room = await prisma.auctionRoom.findUnique({
     where: { id: roomId },
+    include: {
+      participants: { select: { id: true } },
+    },
   });
 
   if (!room || !room.currentItemId) {
@@ -38,6 +47,11 @@ exports.placeBid = async (req, res) => {
     return res.status(400).json({ error: 'Bidding is not open for this item' });
   }
 
+  const participantSkipped = await hasParticipantSkippedCurrentItem(roomId, participant.id);
+  if (participantSkipped) {
+    return res.status(400).json({ error: 'You skipped this item and cannot bid anymore' });
+  }
+
   if (item.currentBid != null && parsedAmount <= item.currentBid) {
     return res.status(400).json({ error: 'Bid must be higher than current bid' });
   }
@@ -46,19 +60,29 @@ exports.placeBid = async (req, res) => {
     return res.status(400).json({ error: 'Bid exceeds remaining purse' });
   }
 
+  const bidContext = processBidWithPatterns({
+    roomId,
+    item,
+    participant,
+    requestedAmount: parsedAmount,
+    participantIds: room.participants.map((entry) => entry.id),
+    strategyType: req.body.strategyType || 'manual',
+    strategyOptions: req.body.strategyOptions,
+  });
+
   await prisma.$transaction([
     prisma.bid.create({
-      data: {
-        amount: parsedAmount,
+      data: AuctionFactory.createBid({
+        amount: bidContext.bidAmount,
         participantId: participant.id,
         itemId: item.id,
-      },
+      }),
     }),
     prisma.item.update({
       where: { id: item.id },
       data: {
-        currentBid: parsedAmount,
-        winnerId: participant.id,
+        currentBid: bidContext.bidAmount,
+        winnerId: bidContext.winnerId,
       },
     }),
   ]);

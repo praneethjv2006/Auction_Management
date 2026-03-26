@@ -26,13 +26,24 @@ model AuctionRoom {
   status        String   @default("waiting") // live, ended, waiting
   currentItemId Int?     @unique
   currentItem   Item?    @relation("CurrentItem", fields: [currentItemId], references: [id])
+  categories    RoomCategory[]
   items         Item[]
   participants  Participant[]
+}
+
+model RoomCategory {
+  id      Int        @id @default(autoincrement())
+  name    String
+  roomId  Int
+  room    AuctionRoom @relation(fields: [roomId], references: [id])
+
+  @@unique([roomId, name])
 }
 
 model Item {
   id             Int      @id @default(autoincrement())
   name           String
+  category       String   @default("General")
   price          Float
   currentBid     Float?
   firstBid       Float?
@@ -49,6 +60,7 @@ model Participant {
   id              Int      @id @default(autoincrement())
   participantCode String   @unique @db.VarChar(6)
   name            String
+  email           String?
   purseAmount     Float
   remainingPurse  Float
   roomId          Int

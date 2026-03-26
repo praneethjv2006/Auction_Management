@@ -1,7 +1,15 @@
 const { Server } = require('socket.io');
 const prisma = require('./lib/prisma');
-const { emitRoomUpdate, handleBidPlaced, setBoughtItemOrder } = require('./controllers/roomController');
+const {
+  emitRoomUpdate,
+  handleBidPlaced,
+  setBoughtItemOrder,
+  participantSkipItem,
+  hasParticipantSkippedCurrentItem,
+} = require('./controllers/roomController');
 const { setIo } = require('./lib/socketStore');
+const { AuctionFactory } = require('./models/factory');
+const { processBidWithPatterns } = require('./models/bidFlow');
 
 const presenceByRoom = new Map();
 
@@ -65,13 +73,24 @@ function attachSocket(server) {
       const parsedRoomId = Number(roomId);
       if (Number.isNaN(parsedRoomId)) return;
 
-      const room = await prisma.auctionRoom.findUnique({ where: { id: parsedRoomId } });
+      const room = await prisma.auctionRoom.findUnique({
+        where: { id: parsedRoomId },
+        include: {
+          participants: { select: { id: true } },
+        },
+      });
       if (!room || !room.currentItemId) return;
 
       const item = await prisma.item.findUnique({ where: { id: room.currentItemId } });
       const participant = await prisma.participant.findUnique({ where: { id: Number(participantId) } });
 
       if (!item || !participant || item.status !== 'ongoing') return;
+
+      const participantSkipped = await hasParticipantSkippedCurrentItem(parsedRoomId, participant.id);
+      if (participantSkipped) {
+        socket.emit('bid:error', { message: 'You skipped this item and cannot bid anymore' });
+        return;
+      }
 
       if (item.winnerId === participant.id) {
         socket.emit('bid:error', { message: 'You already have the highest bid' });
@@ -83,21 +102,51 @@ function attachSocket(server) {
       if (item.currentBid != null && bidAmount <= item.currentBid) return;
       if (bidAmount > participant.remainingPurse) return;
 
+      const bidContext = processBidWithPatterns({
+        roomId: parsedRoomId,
+        item,
+        participant,
+        requestedAmount: bidAmount,
+        participantIds: room.participants.map((entry) => entry.id),
+        strategyType: 'manual',
+      });
+
       await prisma.$transaction([
         prisma.bid.create({
-          data: {
-            amount: bidAmount,
+          data: AuctionFactory.createBid({
+            amount: bidContext.bidAmount,
             participantId: participant.id,
             itemId: item.id,
-          },
+          }),
         }),
         prisma.item.update({
           where: { id: item.id },
-          data: { currentBid: bidAmount, winnerId: participant.id },
+          data: { currentBid: bidContext.bidAmount, winnerId: bidContext.winnerId },
         }),
       ]);
 
       await handleBidPlaced(parsedRoomId);
+    });
+
+    socket.on('participantSkipItem', async ({ roomId, participantId }) => {
+      const parsedRoomId = Number(roomId);
+      const parsedParticipantId = Number(participantId);
+      if (Number.isNaN(parsedRoomId) || Number.isNaN(parsedParticipantId)) {
+        socket.emit('skip:error', { message: 'Invalid skip payload' });
+        return;
+      }
+
+      const roomPresence = getRoomPresence(parsedRoomId);
+      const session = roomPresence.get(socket.id);
+      if (!session || session.role !== 'participant' || Number(session.participantId) !== parsedParticipantId) {
+        socket.emit('skip:error', { message: 'You can only skip from your own participant account' });
+        return;
+      }
+
+      const result = await participantSkipItem(parsedRoomId, parsedParticipantId);
+      if (!result.ok) {
+        socket.emit('skip:error', { message: result.error || 'Skip failed' });
+      }
     });
 
     socket.on('reorderBoughtItems', async ({ roomId, participantId, itemIds }) => {

@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { io } from 'socket.io-client';
+import { getSocketUrl, requestJson } from './network';
 
-const API_BASE_URL = 'https://auction-management.onrender.com/api';
-const SOCKET_URL = 'https://auction-management.onrender.com';
+const SOCKET_URL = getSocketUrl();
 
 export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
   const [room, setRoom] = useState(null);
@@ -12,10 +12,26 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
   const [showBoughtModal, setShowBoughtModal] = useState({ open: false, participant: null });
   const [showAutoModal, setShowAutoModal] = useState(false);
   const [showItemsModal, setShowItemsModal] = useState(false);
+  const [showRestartModal, setShowRestartModal] = useState(false);
   const [itemFilter, setItemFilter] = useState('all');
+  const [itemCategoryFilter, setItemCategoryFilter] = useState('all');
+  const [itemNameSearch, setItemNameSearch] = useState('');
   const [autoBidWindow, setAutoBidWindow] = useState('15');
   const [boughtOrderByParticipant, setBoughtOrderByParticipant] = useState({});
+  const [restartMode, setRestartMode] = useState('same');
+  const [samePurseAmount, setSamePurseAmount] = useState('100');
+  const [individualPurses, setIndividualPurses] = useState({});
+  const [editingParticipantId, setEditingParticipantId] = useState(null);
+  const [editingParticipantPurse, setEditingParticipantPurse] = useState('');
+  const [reassignByItemId, setReassignByItemId] = useState({});
+  const [reassignWinnerByItemId, setReassignWinnerByItemId] = useState({});
+  const [showItemEditModal, setShowItemEditModal] = useState(false);
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [editingItemName, setEditingItemName] = useState('');
+  const [editingItemPrice, setEditingItemPrice] = useState('');
+  const [editingItemCategory, setEditingItemCategory] = useState('');
   const [nowTs, setNowTs] = useState(Date.now());
+  const [captainByParticipantId, setCaptainByParticipantId] = useState({});
 
   const activeParticipantIds = useMemo(
     () => new Set(presence.participants.map((entry) => entry.participantId)),
@@ -25,9 +41,7 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
   useEffect(() => {
     async function fetchRoom() {
       try {
-        const res = await fetch(`${API_BASE_URL}/rooms/${roomId}`);
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load room');
+        const data = await requestJson(`/rooms/${roomId}`);
         setRoom(data);
         setStatus('');
       } catch (e) {
@@ -82,22 +96,51 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
     });
   }, [room]);
 
-  async function handleControl(endpoint, payload) {
+  useEffect(() => {
+    if (!room) return;
+
+    setIndividualPurses((prev) => {
+      const next = { ...prev };
+      for (const participant of room.participants) {
+        if (next[participant.id] == null) {
+          next[participant.id] = String(participant.purseAmount ?? participant.remainingPurse ?? 0);
+        }
+      }
+      return next;
+    });
+
+    setReassignByItemId((prev) => {
+      const next = { ...prev };
+      for (const item of room.items) {
+        if (next[item.id] == null) {
+          next[item.id] = item.status === 'upcoming'
+            ? 'upcoming'
+            : item.status === 'sold'
+              ? 'sold'
+              : 'unsold';
+        }
+      }
+      return next;
+    });
+
+    setReassignWinnerByItemId((prev) => {
+      const next = { ...prev };
+      for (const item of room.items) {
+        if (next[item.id] == null) {
+          next[item.id] = item.winnerId ?? '';
+        }
+      }
+      return next;
+    });
+  }, [room]);
+
+  async function handleControl(endpoint, payload, method = 'POST') {
     try {
-      const res = await fetch(`${API_BASE_URL}/rooms/${roomId}/${endpoint}`, {
-        method: 'POST',
+      const data = await requestJson(`/rooms/${roomId}/${endpoint}`, {
+        method,
         headers: payload ? { 'Content-Type': 'application/json' } : undefined,
         body: payload ? JSON.stringify(payload) : undefined,
       });
-      const contentType = res.headers.get('content-type') || '';
-      let data = null;
-      if (contentType.includes('application/json')) {
-        data = await res.json();
-      } else {
-        const text = await res.text();
-        data = { error: text ? text.slice(0, 160) : res.statusText };
-      }
-      if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
       setRoom(data);
     } catch (error) {
       setStatus(error.message);
@@ -115,8 +158,146 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
     return [...ordered, ...missing];
   }
 
-  if (status) return <div className="status-banner">{status}</div>;
-  if (!room) return null;
+  if (!room) return status ? <div className="status-banner">{status}</div> : null;
+
+  async function handleRestartAuction() {
+    const payload = restartMode === 'individual'
+      ? {
+          mode: 'individual',
+          participantPurses: room.participants.map((participant) => ({
+            participantId: participant.id,
+            purseAmount: Number(individualPurses[participant.id]),
+          })),
+        }
+      : {
+          mode: 'same',
+          purseAmount: Number(samePurseAmount),
+        };
+
+    await handleControl('restart', payload);
+    setShowSelectModal(false);
+    setShowBoughtModal({ open: false, participant: null });
+    setShowItemsModal(false);
+    setItemFilter('upcoming');
+    setItemCategoryFilter('all');
+    setReassignByItemId({});
+    setReassignWinnerByItemId({});
+    setShowRestartModal(false);
+    setStatus('Auction restarted successfully. All items reset to upcoming.');
+  }
+
+  async function handleParticipantPurseSave(participantId) {
+    const purseAmount = Number(editingParticipantPurse);
+    if (Number.isNaN(purseAmount) || purseAmount < 0) {
+      setStatus('Please enter a valid purse amount.');
+      return;
+    }
+
+    try {
+      await handleControl(`participants/${participantId}`, { purseAmount }, 'PATCH');
+      setStatus('Participant purse updated.');
+      setEditingParticipantId(null);
+      setEditingParticipantPurse('');
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
+  async function handleItemReassign(itemId) {
+    const selectedStatus = reassignByItemId[itemId] ?? 'unsold';
+
+    const payload = { status: selectedStatus };
+    if (selectedStatus === 'sold') {
+      const parsedWinnerId = Number(reassignWinnerByItemId[itemId]);
+      if (!parsedWinnerId || Number.isNaN(parsedWinnerId)) {
+        setStatus('Please select a participant for Sold.');
+        return;
+      }
+      payload.newWinnerId = parsedWinnerId;
+    } else {
+      payload.newWinnerId = null;
+    }
+
+    try {
+      await handleControl(`items/${itemId}/reassign`, payload);
+      setStatus('Item assignment updated successfully.');
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
+  function openItemEdit(item) {
+    setEditingItemId(item.id);
+    setEditingItemName(item.name || '');
+    setEditingItemPrice(String(item.price ?? ''));
+    setEditingItemCategory(item.category || 'General');
+    setReassignByItemId((prev) => ({
+      ...prev,
+      [item.id]: item.status === 'upcoming'
+        ? 'upcoming'
+        : item.status === 'sold'
+          ? 'sold'
+          : 'unsold',
+    }));
+    setReassignWinnerByItemId((prev) => ({
+      ...prev,
+      [item.id]: item.winnerId ?? '',
+    }));
+    setShowItemsModal(false);
+    setShowSelectModal(false);
+    setShowBoughtModal({ open: false, participant: null });
+    setShowItemEditModal(true);
+  }
+
+  async function handleItemEditSave() {
+    if (!editingItemId) return;
+
+    try {
+      const updatedRoom = await requestJson(`/rooms/${roomId}/items/${editingItemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editingItemName,
+          price: editingItemPrice,
+          category: editingItemCategory,
+        }),
+      });
+      setRoom(updatedRoom);
+      setStatus('Item updated successfully.');
+      setShowItemEditModal(false);
+      setEditingItemId(null);
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
+  async function handleDeleteRoom() {
+    const confirmed = window.confirm(`Delete room "${room.roomName}"? This removes all items and participants.`);
+    if (!confirmed) return;
+
+    try {
+      await requestJson(`/rooms/${roomId}`, { method: 'DELETE' });
+      onBack();
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
+  async function handleDeleteItem(itemId) {
+    const item = room.items.find((entry) => entry.id === itemId);
+    if (!item) return;
+
+    const confirmed = window.confirm(`Delete item "${item.name}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      const updatedRoom = await requestJson(`/rooms/${roomId}/items/${itemId}`, { method: 'DELETE' });
+      setRoom(updatedRoom);
+      setStatus('Item deleted.');
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
 
   const currentItem = room.currentItem;
   const winnerName = currentItem?.winner
@@ -130,7 +311,18 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
   const timerLeft = room.autoAuction?.enabled && room.autoAuction?.deadlineTs
     ? Math.max(0, Math.ceil((room.autoAuction.deadlineTs - nowTs) / 1000))
     : null;
-  const filteredItems = room.items.filter((item) => itemFilter === 'all' || item.status === itemFilter);
+  const itemCategories = room.categories?.length
+    ? room.categories.map((entry) => entry.name)
+    : Array.from(new Set(room.items.map((item) => item.category || 'General')));
+  const editCategoryOptions = room.categories?.length
+    ? room.categories.map((entry) => entry.name)
+    : itemCategories;
+  const filteredItems = room.items.filter((item) => {
+    const statusMatch = itemFilter === 'all' || item.status === itemFilter;
+    const categoryMatch = itemCategoryFilter === 'all' || (item.category || 'General') === itemCategoryFilter;
+    const nameMatch = !itemNameSearch.trim() || String(item.name || '').toLowerCase().includes(itemNameSearch.trim().toLowerCase());
+    return statusMatch && categoryMatch && nameMatch;
+  });
 
   return (
     <div className="auction-room-page">
@@ -143,6 +335,12 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
           <button className="ghost-button" type="button" onClick={() => setShowItemsModal(true)}>
             View items
           </button>
+          <button className="ghost-button danger-button" type="button" onClick={handleDeleteRoom}>
+            Delete Room
+          </button>
+          <button className="ghost-button" type="button" onClick={() => setShowRestartModal(true)}>
+            Restart Auction
+          </button>
           <button
             className="ghost-button danger-button"
             type="button"
@@ -154,14 +352,7 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
         </div>
       </div>
 
-      <div className="timer-banner">
-        <strong>Auction Timer</strong>
-        {room.autoAuction?.enabled ? (
-          <span>{timerLeft != null ? `${timerLeft}s` : '--'}</span>
-        ) : (
-          <span>Automatic timer is off</span>
-        )}
-      </div>
+      {status ? <div className="status-banner">{status}</div> : null}
 
       <div className="room-meta">
         <span>Room ID: {room.id}</span>
@@ -192,16 +383,44 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
           <button
             type="button"
             className="ghost-button"
-            onClick={() => {
-              if (room.autoAuction?.enabled) {
-                handleControl('auto', { enabled: false });
-              } else {
-                setShowAutoModal(true);
-              }
-            }}
+            onClick={() => handleControl('previous')}
+            disabled={!!currentItem}
           >
-            {room.autoAuction?.enabled ? 'Disable Automatic Auction' : 'Enable Automatic Auction'}
+            Previous Item
           </button>
+          {currentItem ? (
+            <button type="button" className="ghost-button" onClick={() => handleControl('skip')}>
+              Skip Item (Organizer)
+            </button>
+          ) : null}
+          {room.autoAuction?.enabled ? (
+            <>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={async () => {
+                  await handleControl('auto', { enabled: false });
+                  setStatus('Automatic auction paused.');
+                }}
+              >
+                Pause Automatic Auction
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={async () => {
+                  await handleControl('auto', { enabled: false });
+                  setStatus('Switched to manual auction mode.');
+                }}
+              >
+                Switch To Manual Auction
+              </button>
+            </>
+          ) : (
+            <button type="button" className="ghost-button" onClick={() => setShowAutoModal(true)}>
+              Enable Automatic Auction
+            </button>
+          )}
         </div>
 
         {room.autoAuction?.enabled ? (
@@ -211,10 +430,33 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
           </p>
         ) : null}
 
+        {room.skipState?.participantNames?.length ? (
+          <div className="status-banner">
+            Skipped by: {room.skipState.participantNames.join(', ')}
+          </div>
+        ) : null}
+
         {currentItem ? (
-          <div className="current-item highlight-card item-spotlight">
+          <div className="current-item highlight-card item-spotlight pro-current-item">
+            {room.autoAuction?.enabled && timerLeft != null ? (
+              <span
+                key={timerLeft}
+                className={`auction-timer-pill timer-auction-tick ${
+                  timerLeft <= 5
+                    ? 'timer-critical'
+                    : timerLeft > 10
+                      ? 'timer-safe'
+                      : ''
+                }`}
+              >
+                {timerLeft}
+              </span>
+            ) : (
+              <span className="auction-timer-pill">--</span>
+            )}
             <p className="item-kicker">Current Item</p>
             <strong className="item-name">{currentItem.name}</strong>
+            <span className="item-category-badge">{currentItem.category || 'General'}</span>
             <div className="item-stats">
               <div className="item-stat-pill">
                 <span className="item-stat-label">Current Bid</span>
@@ -235,7 +477,7 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
         )}
 
         {/* Select next item button and modal */}
-        {!currentItem && room.status === 'live' && upcomingItems.length > 0 && (
+        {!room.autoAuction?.enabled && !currentItem && room.status === 'live' && upcomingItems.length > 0 && (
           <button
             type="button"
             className="ghost-button"
@@ -251,8 +493,9 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
               <h3>Select Next Item</h3>
               <div className="info-list">
                 {upcomingItems.map((item) => (
-                  <div key={item.id} className="info-card">
+                  <div key={item.id} className="info-card item-card">
                     <strong>{item.name}</strong>
+                    <span className="item-category-badge">{item.category || 'General'}</span>
                     <span>Price: {item.price}</span>
                     <button
                       type="button"
@@ -262,6 +505,13 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
                       }}
                     >
                       Select
+                    </button>
+                    <button
+                      type="button"
+                      className="item-edit-icon"
+                      onClick={() => openItemEdit(item)}
+                    >
+                      &#9998;
                     </button>
                   </div>
                 ))}
@@ -294,12 +544,55 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
                 </button>
               </div>
               <span>ID: {participant.participantCode}</span>
-              <span>Purse Remaining: {participant.remainingPurse}</span>
+              <div className="participant-balance-row">
+                <span>Purse Remaining: {participant.remainingPurse} cr</span>
+                {editingParticipantId !== participant.id ? (
+                  <button
+                    type="button"
+                    className="pencil-button"
+                    onClick={() => {
+                      setEditingParticipantId(participant.id);
+                      setEditingParticipantPurse(String(participant.purseAmount ?? participant.remainingPurse ?? 0));
+                    }}
+                    aria-label="Edit purse"
+                    title="Edit purse"
+                  >
+                    &#9998;
+                  </button>
+                ) : null}
+              </div>
+
+              {editingParticipantId === participant.id ? (
+                <div className="item-filter-row">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editingParticipantPurse}
+                    onChange={(event) => setEditingParticipantPurse(event.target.value)}
+                    placeholder="Purse amount"
+                  />
+                  <button type="button" onClick={() => handleParticipantPurseSave(participant.id)}>
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => {
+                      setEditingParticipantId(null);
+                      setEditingParticipantPurse('');
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : null}
             </div>
           ))}
           {room.participants.length === 0 && <p>No participants yet.</p>}
         </div>
       </section>
+
 
       {/* Items bought modal */}
       {showBoughtModal.open && (
@@ -309,9 +602,16 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
             <div className="info-list">
               {showBoughtModal.participant.winningItems && showBoughtModal.participant.winningItems.length > 0 ? (
                 showBoughtModal.participant.winningItems.map((item) => (
-                  <div key={item.id} className="info-card">
+                  <div key={item.id} className="info-card item-card">
                     <strong>{item.name}</strong>
                     <span>Cost: {item.currentBid ?? item.price}</span>
+                    <button
+                      type="button"
+                      className="item-edit-icon"
+                      onClick={() => openItemEdit(item)}
+                    >
+                      &#9998;
+                    </button>
                   </div>
                 ))
               ) : (
@@ -366,29 +666,194 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
       {showItemsModal && (
         <div className="modal-overlay">
           <div className="modal-content">
+            <button className="modal-close-button" type="button" onClick={() => setShowItemsModal(false)}>
+              &times;
+            </button>
             <h3>View Items</h3>
             <div className="item-filter-row">
-              <button type="button" className={`ghost-button ${itemFilter === 'all' ? 'filter-active' : ''}`} onClick={() => setItemFilter('all')}>All</button>
-              <button type="button" className={`ghost-button ${itemFilter === 'upcoming' ? 'filter-active' : ''}`} onClick={() => setItemFilter('upcoming')}>Upcoming</button>
-              <button type="button" className={`ghost-button ${itemFilter === 'ongoing' ? 'filter-active' : ''}`} onClick={() => setItemFilter('ongoing')}>Ongoing</button>
-              <button type="button" className={`ghost-button ${itemFilter === 'sold' ? 'filter-active' : ''}`} onClick={() => setItemFilter('sold')}>Sold</button>
-              <button type="button" className={`ghost-button ${itemFilter === 'unsold' ? 'filter-active' : ''}`} onClick={() => setItemFilter('unsold')}>Unsold</button>
+              <input
+                value={itemNameSearch}
+                onChange={(event) => setItemNameSearch(event.target.value)}
+                placeholder="Search by name"
+              />
+              <select
+                className="filter-select"
+                value={itemFilter}
+                onChange={(event) => setItemFilter(event.target.value)}
+              >
+                <option value="all">All Status</option>
+                <option value="upcoming">Upcoming</option>
+                <option value="ongoing">Ongoing</option>
+                <option value="sold">Sold</option>
+                <option value="unsold">Unsold</option>
+              </select>
+              <select
+                className="filter-select"
+                value={itemCategoryFilter}
+                onChange={(event) => setItemCategoryFilter(event.target.value)}
+              >
+                <option value="all">All Categories</option>
+                {itemCategories.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
             </div>
             <div className="info-list">
               {filteredItems.length ? (
                 filteredItems.map((item) => (
-                  <div key={item.id} className="info-card">
+                  <div key={item.id} className="info-card item-card">
                     <strong>{item.name}</strong>
+                    <span className="item-category-badge">{item.category || 'General'}</span>
                     <span>Status: {item.status}</span>
                     <span>Base Price: {item.price}</span>
                     <span>Final: {item.currentBid ?? item.price}</span>
+                    <div className="item-filter-row">
+                      <button
+                        type="button"
+                        className="ghost-button danger-button"
+                        onClick={() => handleDeleteItem(item.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="item-edit-icon"
+                      onClick={() => openItemEdit(item)}
+                    >
+                      &#9998;
+                    </button>
                   </div>
                 ))
               ) : (
                 <p>No items in this category.</p>
               )}
             </div>
-            <button className="ghost-button" type="button" onClick={() => setShowItemsModal(false)}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {showItemEditModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <button
+              className="modal-close-button"
+              type="button"
+              onClick={() => {
+                setShowItemEditModal(false);
+                setEditingItemId(null);
+              }}
+            >
+              &times;
+            </button>
+            <h3>Edit Item</h3>
+            <div className="stack-form">
+              <input
+                value={editingItemName}
+                onChange={(event) => setEditingItemName(event.target.value)}
+                placeholder="Item name"
+                required
+              />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={editingItemPrice}
+                onChange={(event) => setEditingItemPrice(event.target.value)}
+                placeholder="Price"
+                required
+              />
+              <select
+                value={editingItemCategory}
+                onChange={(event) => setEditingItemCategory(event.target.value)}
+                required
+              >
+                {editCategoryOptions.length === 0 ? (
+                  <option value="General">General</option>
+                ) : (
+                  editCategoryOptions.map((category) => (
+                    <option key={category} value={category}>{category}</option>
+                  ))
+                )}
+              </select>
+            </div>
+            <div className="control-buttons">
+              <button type="button" onClick={handleItemEditSave}>Save Changes</button>
+              <button className="ghost-button" type="button" onClick={() => setShowItemEditModal(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRestartModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3>Restart Auction</h3>
+            <p className="muted-text">
+              Restarting resets all items to upcoming, removes winners from items, clears bids, and asks for purse setup.
+            </p>
+
+            <div className="item-filter-row">
+              <button
+                type="button"
+                className={`ghost-button ${restartMode === 'same' ? 'filter-active' : ''}`}
+                onClick={() => setRestartMode('same')}
+              >
+                Same amount for all
+              </button>
+              <button
+                type="button"
+                className={`ghost-button ${restartMode === 'individual' ? 'filter-active' : ''}`}
+                onClick={() => setRestartMode('individual')}
+              >
+                Enter each participant purse
+              </button>
+            </div>
+
+            {restartMode === 'same' ? (
+              <div className="stack-form">
+                <label className="label" htmlFor="samePurseAmount">Purse amount for all participants</label>
+                <input
+                  id="samePurseAmount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={samePurseAmount}
+                  onChange={(event) => setSamePurseAmount(event.target.value)}
+                />
+              </div>
+            ) : (
+              <div className="info-list">
+                {room.participants.map((participant) => (
+                  <div key={participant.id} className="info-card">
+                    <strong>{participant.name}</strong>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={individualPurses[participant.id] ?? ''}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setIndividualPurses((prev) => ({
+                          ...prev,
+                          [participant.id]: value,
+                        }));
+                      }}
+                      placeholder="Purse amount"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="control-buttons">
+              <button type="button" onClick={handleRestartAuction}>Confirm Restart Auction</button>
+              <button className="ghost-button" type="button" onClick={() => setShowRestartModal(false)}>
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -397,30 +862,102 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
         <section className="panel">
           <h3>Auction Result: Items Bought by Participants</h3>
           <div className="participant-grid">
-            {room.participants.map((participant) => {
+            {room.participants.map((participant, teamIndex) => {
               const orderedItems = getOrderedBoughtItems(participant);
+              const mainItems = orderedItems.slice(0, 11);
+              const substituteItems = orderedItems.slice(11);
+              const captainItemId = captainByParticipantId[participant.id] ?? '';
 
               return (
-                <div key={participant.id} className="info-card participant-card ended-participant-card">
+                <div key={participant.id} className={`info-card participant-card ended-participant-card team-variant-${teamIndex % 5}`}>
                   <div className="participant-card-top">
                     <strong>{participant.name}</strong>
                     <span className="muted-text">Total: {orderedItems.length}</span>
                   </div>
-                  <div className="bought-subcards">
-                    {orderedItems.length ? (
-                      orderedItems.map((item, index) => (
-                        <div
-                          key={item.id}
-                          className="bought-subcard"
+                  {orderedItems.length ? (
+                    <>
+                      <div className="results-team-header" style={{ marginBottom: 10 }}>
+                        <span className="muted-text">Captain</span>
+                        <select
+                          className="filter-select"
+                          value={captainItemId}
+                          onChange={(event) => {
+                            const nextCaptainId = event.target.value;
+                            setCaptainByParticipantId((prev) => ({
+                              ...prev,
+                              [participant.id]: nextCaptainId,
+                            }));
+                          }}
                         >
-                          <strong>{item.name}</strong>
-                          <span>Cost: {item.currentBid ?? item.price}</span>
+                          <option value="">Select captain</option>
+                          {orderedItems.map((item) => (
+                            <option key={item.id} value={String(item.id)}>
+                              {item.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="results-team-section">
+                        <div className="results-team-header">
+                          <span className="muted-text">Main (11)</span>
                         </div>
-                      ))
-                    ) : (
-                      <span className="muted-text">No items bought.</span>
-                    )}
-                  </div>
+                        <div className="bought-subcards">
+                          {mainItems.map((item) => (
+                            <div key={item.id} className="bought-subcard item-card">
+                              <div className="bought-subcard-content">
+                                <strong>{item.name}</strong>
+                                <span className="item-category-badge">{item.category || 'General'}</span>
+                              </div>
+                              {String(item.id) === String(captainItemId) ? <span className="captain-badge">C</span> : null}
+                              <button
+                                type="button"
+                                className="item-edit-icon"
+                                onClick={() => openItemEdit(item)}
+                              >
+                                &#9998;
+                              </button>
+                            </div>
+                          ))}
+                          {mainItems.length < 11 ? (
+                            <div className="results-empty-note muted-text">
+                              Slots remaining: {11 - mainItems.length}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="results-team-section">
+                        <div className="results-team-header">
+                          <span className="muted-text">Substitutes</span>
+                        </div>
+                        <div className="bought-subcards">
+                          {substituteItems.length ? (
+                            substituteItems.map((item) => (
+                              <div key={item.id} className="bought-subcard item-card">
+                                <div className="bought-subcard-content">
+                                  <strong>{item.name}</strong>
+                                  <span className="item-category-badge">{item.category || 'General'}</span>
+                                </div>
+                                {String(item.id) === String(captainItemId) ? <span className="captain-badge">C</span> : null}
+                                <button
+                                  type="button"
+                                  className="item-edit-icon"
+                                  onClick={() => openItemEdit(item)}
+                                >
+                                  &#9998;
+                                </button>
+                              </div>
+                            ))
+                          ) : (
+                            <span className="muted-text">No substitutes.</span>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <span className="muted-text">No items bought.</span>
+                  )}
                 </div>
               );
             })}

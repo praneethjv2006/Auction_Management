@@ -1,9 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Sora:wght@400;500;600;700&display=swap');
+
+:root {
+  color-scheme: dark;
+  --bg-900: #12051e;
+  --bg-850: #170827;
+  --bg-800: #1d0c33;
+  --bg-700: #251042;
+  --glass-01: rgba(28, 12, 46, 0.9);
+  --glass-02: rgba(36, 14, 60, 0.82);
+  --glass-03: rgba(30, 12, 52, 0.75);
+  --text-100: #f5f7ff;
+  --text-200: #c9d2ff;
+  --text-300: #8b96c5;
+  --accent-1: #7b5cff;
+  --accent-2: #b04bff;
+  --accent-3: #ff2fd0;
+  --accent-4: #ff8a3d;
+  --accent-5: #38f2ff;
+  --warning: #ffb547;
+  --danger: #ff6b6b;
+  --shadow-1: 0 22px 55px rgba(8, 10, 18, 0.55);
+  --shadow-2: 0 10px 28px rgba(9, 14, 26, 0.5);
+  --glow-1: 0 0 18px rgba(255, 47, 208, 0.35);
+  --glow-2: 0 0 24px rgba(123, 92, 255, 0.35);
+  --glow-3: 0 0 20px rgba(255, 138, 61, 0.35);
+  --glow-4: 0 0 18px rgba(56, 242, 255, 0.35);
+  --border-1: rgba(181, 108, 255, 0.32);
+  --border-2: rgba(255, 47, 208, 0.5);
+  --radius-xl: 22px;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-pill: 999px;
+}
+
 body {
   margin: 0;
-  font-family: 'Trebuchet MS', 'Gill Sans', 'Segoe UI', sans-serif;
+  font-family: 'Space Grotesk', 'Sora', 'Segoe UI', sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(255, 219, 172, 0.9), transparent 30%),
-    linear-gradient(180deg, #f7ead8 0%, #efe4d4 48%, #e7dbc8 100%);
+    radial-gradient(circle at 10% 18%, rgba(255, 47, 208, 0.25), transparent 35%),
+    radial-gradient(circle at 82% 12%, rgba(123, 92, 255, 0.3), transparent 36%),
+    radial-gradient(circle at 80% 78%, rgba(255, 138, 61, 0.22), transparent 42%),
+    radial-gradient(circle at 18% 78%, rgba(56, 242, 255, 0.2), transparent 40%),
+    linear-gradient(180deg, #0e0418 0%, #160824 45%, #12051e 100%);
+  color: var(--text-100);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -13,8 +52,11 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font-family: inherit;
+  color: inherit;
 }
 
 #root {

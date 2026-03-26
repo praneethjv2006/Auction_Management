@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import { getSocketUrl, requestJson } from './network';
 
-const API_BASE_URL = 'https://auction-management.onrender.com/api';
-const SOCKET_URL = 'https://auction-management.onrender.com';
+const SOCKET_URL = getSocketUrl();
 
-export default function ParticipantRoomPage({ participant, roomId, onBack }) {
+export default function ParticipantRoomPage({ participant, roomId, onBack, onLogout }) {
   const [room, setRoom] = useState(null);
   const [presence, setPresence] = useState({ participants: [], organizers: [] });
   const [status, setStatus] = useState('Loading room...');
@@ -12,7 +12,14 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
   const [showBoughtModal, setShowBoughtModal] = useState({ open: false, participant: null });
   const [showItemsModal, setShowItemsModal] = useState(false);
   const [itemFilter, setItemFilter] = useState('all');
+  const [itemCategoryFilter, setItemCategoryFilter] = useState('all');
+  const [itemNameSearch, setItemNameSearch] = useState('');
   const [draggedItemId, setDraggedItemId] = useState(null);
+  const [captainItemId, setCaptainItemId] = useState(null);
+  const [wicketKeeperItemId, setWicketKeeperItemId] = useState(null);
+  const [showRolePicker, setShowRolePicker] = useState(false);
+  const [draftCaptainItemId, setDraftCaptainItemId] = useState(null);
+  const [draftWicketKeeperItemId, setDraftWicketKeeperItemId] = useState(null);
   const [nowTs, setNowTs] = useState(Date.now());
   const socketRef = useRef(null);
 
@@ -25,9 +32,7 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
   useEffect(() => {
     async function fetchRoom() {
       try {
-        const res = await fetch(`${API_BASE_URL}/rooms/${roomId}`);
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load room');
+        const data = await requestJson(`/rooms/${roomId}`);
         setRoom(data);
         setStatus('');
       } catch (e) {
@@ -68,6 +73,10 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
       if (payload?.message) setBidError(payload.message);
     });
 
+    socket.on('skip:error', (payload) => {
+      if (payload?.message) setBidError(payload.message);
+    });
+
     socket.on('presence:update', (payload) => {
       setPresence(payload);
     });
@@ -91,8 +100,28 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
       return;
     }
 
+    const skipState = room?.skipState;
+    const participantSkipped = skipState
+      && skipState.itemId === currentItem.id
+      && Array.isArray(skipState.participantIds)
+      && skipState.participantIds.includes(participant.id);
+
+    if (participantSkipped) {
+      setBidError('You skipped this item and cannot bid anymore.');
+      return;
+    }
+
     const currentBidBase = currentItem?.currentBid ?? currentItem?.price ?? 0;
-    const nextBid = currentBidBase + 1;
+    const bidBaseNumber = Number(currentBidBase) || 0;
+
+    let increment = 1;
+    if (bidBaseNumber < 1) increment = 0.2;
+    else if (bidBaseNumber < 2) increment = 0.25;
+    else if (bidBaseNumber < 5) increment = 0.5;
+    else if (bidBaseNumber <= 10) increment = 1;
+    else increment = 1.5;
+
+    const nextBid = Number((bidBaseNumber + increment).toFixed(2));
     const remainingPurse = participantRecord
       ? participantRecord.remainingPurse
       : participant.remainingPurse;
@@ -144,8 +173,7 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
     setDraggedItemId(null);
   }
 
-  if (status) return <div className="status-banner">{status}</div>;
-  if (!room) return null;
+  if (!room) return status ? <div className="status-banner">{status}</div> : null;
 
   const currentItem = room.currentItem;
   const participantRecord = room.participants.find((p) => p.id === participant.id);
@@ -159,7 +187,22 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
   const timerLeft = room.autoAuction?.enabled && room.autoAuction?.deadlineTs
     ? Math.max(0, Math.ceil((room.autoAuction.deadlineTs - nowTs) / 1000))
     : null;
-  const filteredItems = room.items.filter((item) => itemFilter === 'all' || item.status === itemFilter);
+  const itemCategories = room.categories?.length
+    ? room.categories.map((entry) => entry.name)
+    : Array.from(new Set(room.items.map((item) => item.category || 'General')));
+  const filteredItems = room.items.filter((item) => {
+    const statusMatch = itemFilter === 'all' || item.status === itemFilter;
+    const categoryMatch = itemCategoryFilter === 'all' || (item.category || 'General') === itemCategoryFilter;
+    const nameMatch = !itemNameSearch.trim() || String(item.name || '').toLowerCase().includes(itemNameSearch.trim().toLowerCase());
+    return statusMatch && categoryMatch && nameMatch;
+  });
+  const participantSkippedCurrentItem = !!(
+    currentItem
+    && room.skipState
+    && room.skipState.itemId === currentItem.id
+    && Array.isArray(room.skipState.participantIds)
+    && room.skipState.participantIds.includes(participant.id)
+  );
 
   return (
     <div className="auction-room-page">
@@ -168,30 +211,38 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
           &larr; Back to entry
         </button>
         <h2>Room {room.roomName}</h2>
-        <button className="ghost-button" type="button" onClick={() => setShowItemsModal(true)}>
-          View items
-        </button>
+        <div className="header-actions">
+          <button className="ghost-button" type="button" onClick={() => setShowItemsModal(true)}>
+            View items
+          </button>
+          <button className="ghost-button" type="button" onClick={onLogout}>
+            Log out
+          </button>
+        </div>
       </div>
 
-      <div className="timer-banner">
-        <strong>Auction Timer</strong>
-        {room.autoAuction?.enabled ? (
-          <span>{timerLeft != null ? `${timerLeft}s` : '--'}</span>
-        ) : (
-          <span>Automatic timer is off</span>
-        )}
+      {status ? <div className="status-banner">{status}</div> : null}
+
+      <div className="participant-meta-strip">
+        <span className="participant-room-id">Room ID: {room.id}</span>
+        <div className="participant-highlight-name-block">
+          <div className="participant-name-card">
+            <span className="participant-highlight-name">{participant.name}</span>
+          </div>
+          {room.status !== 'ended' && currentItem && !participantSkippedCurrentItem ? (
+            <div className="participant-current-category-highlight">
+              {currentItem.category || 'General'}
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      <div className="room-meta">
-        <span>Room ID: {room.id}</span>
-        <span>Status: {room.status}</span>
-        <div className="presence-bar">
-          <div className={`presence-chip ${activeOrganizer ? 'active' : 'inactive'}`}>
-            <span className="presence-dot" /> Organizer online
-          </div>
-          <div className="presence-chip">
-            <span className="presence-dot" /> Participants online: {activeParticipantIds.size}
-          </div>
+      <div className="presence-bar">
+        <div className={`presence-chip ${activeOrganizer ? 'active' : 'inactive'}`}>
+          <span className="presence-dot" /> Organizer online
+        </div>
+        <div className="presence-chip">
+          <span className="presence-dot" /> Participants online: {activeParticipantIds.size}
         </div>
       </div>
 
@@ -200,9 +251,26 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
           <div className="panel control-panel">
             <h3>Current item</h3>
             {currentItem ? (
-              <div className="current-item highlight-card item-spotlight participant-spotlight">
+              <div className="current-item highlight-card item-spotlight participant-spotlight pro-current-item">
+                {room.autoAuction?.enabled && timerLeft != null ? (
+                  <span
+                    key={timerLeft}
+                    className={`auction-timer-pill timer-auction-tick ${
+                      timerLeft <= 5
+                        ? 'timer-critical'
+                        : timerLeft > 10
+                          ? 'timer-safe'
+                          : ''
+                    }`}
+                  >
+                    {timerLeft}
+                  </span>
+                ) : (
+                  <span className="auction-timer-pill">--</span>
+                )}
                 <p className="item-kicker">Live Bidding</p>
                 <strong className="item-name">{currentItem.name}</strong>
+                <span className="item-category-badge">{currentItem.category || 'General'}</span>
                 <span className="base-price-note">Base Price: {currentItem.price}</span>
                 <div className="bid-strip">
                   <div className="item-stat-pill">
@@ -218,16 +286,36 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
                       type="button"
                       className="primary-bid-button"
                       onClick={(event) => handleBid(event)}
-                      disabled={room.status !== 'live'}
+                      disabled={room.status !== 'live' || participantSkippedCurrentItem}
                     >
-                      Bid +1
+                      Bid
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => {
+                      setBidError('');
+                      socketRef.current?.emit('participantSkipItem', {
+                        roomId,
+                        participantId: participant.id,
+                      });
+                    }}
+                    disabled={room.status !== 'live' || participantSkippedCurrentItem}
+                  >
+                    {participantSkippedCurrentItem ? 'Skipped' : 'Skip Item'}
+                  </button>
                 </div>
               </div>
             ) : (
               <p>Waiting for the organizer to select the next item.</p>
             )}
+
+            {room.skipState?.participantNames?.length ? (
+              <div className="status-banner skip-banner">
+                <strong>Skipped:</strong> {room.skipState.participantNames.join(', ')}
+              </div>
+            ) : null}
 
             <form className="stack-form" onSubmit={(event) => handleBid(event)}>
               {bidError ? <span className="status-banner">{bidError}</span> : null}
@@ -265,36 +353,171 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
         </>
       ) : (
         <section className="panel">
-          <h3>Final Results</h3>
+          <h3 className="results-title">Final Results</h3>
           <div className="participant-grid">
-            {room.participants.map((p) => {
+            {room.participants.map((p, teamIndex) => {
               const isSelf = p.id === participant.id;
+              const winningItems = p.winningItems || [];
+              const mainItems = winningItems.slice(0, 11);
+              const substituteItems = winningItems.slice(11);
               return (
-                <div key={p.id} className={`info-card participant-card ended-participant-card ${isSelf ? 'self-card' : ''}`}>
-                  <div className="participant-card-top">
-                    <strong>{p.name}</strong>
+                <div
+                  key={p.id}
+                  className={`info-card participant-card ended-participant-card team-variant-${teamIndex % 5} ${isSelf ? 'self-card' : ''}`}
+                >
+                  <div className="results-card-header">
+                    <strong className="results-team-name">{p.name}</strong>
                     <span className="muted-text">Total: {(p.winningItems || []).length}</span>
                   </div>
-                  <div className="bought-subcards">
-                    {(p.winningItems || []).length ? (
-                      p.winningItems.map((item, index) => (
-                        <div
-                          key={item.id}
-                          className={`bought-subcard ${isSelf ? 'can-drag' : 'read-only'}`}
-                          draggable={isSelf}
-                          onDragStart={() => isSelf && setDraggedItemId(item.id)}
-                          onDragOver={(event) => isSelf && event.preventDefault()}
-                          onDrop={() => isSelf && reorderOwnItems(index)}
-                        >
-                          <strong>{item.name}</strong>
-                          <span>Cost: {item.currentBid ?? item.price}</span>
+                  {winningItems.length ? (
+                    <>
+                      <div className="results-team-section">
+                        <div className="results-team-header">
+                          <span className="muted-text">Main (11)</span>
                         </div>
-                      ))
-                    ) : (
-                      <span className="muted-text">No items bought.</span>
-                    )}
-                  </div>
-                  {isSelf ? <span className="muted-text">Drag your item cards to reorder.</span> : null}
+                        <div className="bought-subcards">
+                          {mainItems.map((item, index) => (
+                            <div
+                              key={item.id}
+                              className={`bought-subcard ${isSelf ? 'can-drag' : 'read-only'}`}
+                              draggable={isSelf}
+                              onDragStart={() => isSelf && setDraggedItemId(item.id)}
+                              onDragOver={(event) => isSelf && event.preventDefault()}
+                              onDrop={() => isSelf && reorderOwnItems(index)}
+                            >
+                              <div className="bought-subcard-content">
+                                <strong>{item.name}</strong>
+                                <span className="item-category-badge">{item.category || 'General'}</span>
+                              </div>
+                              {isSelf && captainItemId === item.id ? <span className="captain-badge">C</span> : null}
+                              {isSelf && wicketKeeperItemId === item.id ? <span className="wk-badge">WK</span> : null}
+                            </div>
+                          ))}
+                          {isSelf && mainItems.length < 11 ? (
+                            <div
+                              className="results-dropzone"
+                              onDragOver={(event) => event.preventDefault()}
+                              onDrop={() => reorderOwnItems(mainItems.length)}
+                            >
+                              Drop here to add into Main
+                            </div>
+                          ) : null}
+                          {mainItems.length < 11 ? (
+                            <div className="results-empty-note muted-text">
+                              Slots remaining: {11 - mainItems.length}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="results-team-section">
+                        <div className="results-team-header">
+                          <span className="muted-text">Substitutes</span>
+                        </div>
+                        <div className="bought-subcards">
+                          {substituteItems.length ? (
+                            substituteItems.map((item, index) => {
+                              const absoluteIndex = 11 + index;
+                              return (
+                                <div
+                                  key={item.id}
+                                  className={`bought-subcard ${isSelf ? 'can-drag' : 'read-only'}`}
+                                  draggable={isSelf}
+                                  onDragStart={() => isSelf && setDraggedItemId(item.id)}
+                                  onDragOver={(event) => isSelf && event.preventDefault()}
+                                  onDrop={() => isSelf && reorderOwnItems(absoluteIndex)}
+                                >
+                                  <div className="bought-subcard-content">
+                                    <strong>{item.name}</strong>
+                                    <span className="item-category-badge">{item.category || 'General'}</span>
+                                  </div>
+                                  {isSelf && captainItemId === item.id ? <span className="captain-badge">C</span> : null}
+                                  {isSelf && wicketKeeperItemId === item.id ? <span className="wk-badge">WK</span> : null}
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <span className="muted-text">No substitutes.</span>
+                          )}
+                        </div>
+
+                        {isSelf ? (
+                          <div className="results-role-box">
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              onClick={() => {
+                                setDraftCaptainItemId(captainItemId);
+                                setDraftWicketKeeperItemId(wicketKeeperItemId);
+                                setShowRolePicker(true);
+                              }}
+                            >
+                              Select Captain & Wicket Keeper
+                            </button>
+
+                            {showRolePicker ? (
+                              <>
+                                <div className="results-role-controls">
+                                  <select
+                                    className="filter-select"
+                                    value={draftCaptainItemId ? String(draftCaptainItemId) : ''}
+                                    onChange={(event) => setDraftCaptainItemId(event.target.value ? Number(event.target.value) : null)}
+                                  >
+                                    <option value="">Captain</option>
+                                    {winningItems.map((item) => (
+                                      <option key={item.id} value={String(item.id)}>
+                                        {item.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <select
+                                    className="filter-select"
+                                    value={draftWicketKeeperItemId ? String(draftWicketKeeperItemId) : ''}
+                                    onChange={(event) => setDraftWicketKeeperItemId(event.target.value ? Number(event.target.value) : null)}
+                                  >
+                                    <option value="">Wicket Keeper</option>
+                                    {winningItems.map((item) => (
+                                      <option key={item.id} value={String(item.id)}>
+                                        {item.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div className="control-buttons" style={{ marginTop: 10 }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCaptainItemId(draftCaptainItemId);
+                                      setWicketKeeperItemId(draftWicketKeeperItemId);
+                                      setShowRolePicker(false);
+                                    }}
+                                  >
+                                    Save Changes
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="ghost-button"
+                                    onClick={() => {
+                                      setDraftCaptainItemId(captainItemId);
+                                      setDraftWicketKeeperItemId(wicketKeeperItemId);
+                                      setShowRolePicker(false);
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {isSelf ? <span className="muted-text">Drag cards between Main and Substitutes.</span> : null}
+                    </>
+                  ) : (
+                    <span className="muted-text">No items bought.</span>
+                  )}
                 </div>
               );
             })}
@@ -311,7 +534,13 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
                 showBoughtModal.participant.winningItems.map((item) => (
                   <div key={item.id} className="info-card">
                     <strong>{item.name}</strong>
-                    <span>Cost: {item.currentBid ?? item.price}</span>
+                    <span className="item-category-badge">{item.category || 'General'}</span>
+                    {showBoughtModal.participant.id === participant.id && captainItemId === item.id ? (
+                      <span className="captain-badge">C</span>
+                    ) : null}
+                    {showBoughtModal.participant.id === participant.id && wicketKeeperItemId === item.id ? (
+                      <span className="wk-badge">WK</span>
+                    ) : null}
                   </div>
                 ))
               ) : (
@@ -328,19 +557,44 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
       {showItemsModal && (
         <div className="modal-overlay">
           <div className="modal-content">
+            <button className="modal-close-button" type="button" onClick={() => setShowItemsModal(false)}>
+              &times;
+            </button>
             <h3>View Items</h3>
             <div className="item-filter-row">
-              <button type="button" className={`ghost-button ${itemFilter === 'all' ? 'filter-active' : ''}`} onClick={() => setItemFilter('all')}>All</button>
-              <button type="button" className={`ghost-button ${itemFilter === 'upcoming' ? 'filter-active' : ''}`} onClick={() => setItemFilter('upcoming')}>Upcoming</button>
-              <button type="button" className={`ghost-button ${itemFilter === 'ongoing' ? 'filter-active' : ''}`} onClick={() => setItemFilter('ongoing')}>Ongoing</button>
-              <button type="button" className={`ghost-button ${itemFilter === 'sold' ? 'filter-active' : ''}`} onClick={() => setItemFilter('sold')}>Sold</button>
-              <button type="button" className={`ghost-button ${itemFilter === 'unsold' ? 'filter-active' : ''}`} onClick={() => setItemFilter('unsold')}>Unsold</button>
+              <input
+                value={itemNameSearch}
+                onChange={(event) => setItemNameSearch(event.target.value)}
+                placeholder="Search by name"
+              />
+              <select
+                className="filter-select"
+                value={itemFilter}
+                onChange={(event) => setItemFilter(event.target.value)}
+              >
+                <option value="all">All Status</option>
+                <option value="upcoming">Upcoming</option>
+                <option value="ongoing">Ongoing</option>
+                <option value="sold">Sold</option>
+                <option value="unsold">Unsold</option>
+              </select>
+              <select
+                className="filter-select"
+                value={itemCategoryFilter}
+                onChange={(event) => setItemCategoryFilter(event.target.value)}
+              >
+                <option value="all">All Categories</option>
+                {itemCategories.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
             </div>
             <div className="info-list">
               {filteredItems.length ? (
                 filteredItems.map((item) => (
                   <div key={item.id} className="info-card">
                     <strong>{item.name}</strong>
+                    <span className="item-category-badge">{item.category || 'General'}</span>
                     <span>Status: {item.status}</span>
                     <span>Base Price: {item.price}</span>
                     <span>Final: {item.currentBid ?? item.price}</span>
@@ -350,7 +604,6 @@ export default function ParticipantRoomPage({ participant, roomId, onBack }) {
                 <p>No items in this category.</p>
               )}
             </div>
-            <button className="ghost-button" type="button" onClick={() => setShowItemsModal(false)}>Close</button>
           </div>
         </div>
       )}

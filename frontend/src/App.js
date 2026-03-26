@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import './App.css';
 import usePage from './usePage';
 import EntryPage from './EntryPage';
@@ -7,20 +7,49 @@ import OrganizerDashboard from './OrganizerDashboard';
 import OrganizerRoomPage from './OrganizerRoomPage';
 import ParticipantRoomPage from './ParticipantRoomPage';
 
+const SESSION_KEY = 'auction_session_v1';
+
 function App() {
-  const [page, goto] = usePage('entry');
-  const [organizer, setOrganizer] = useState(null);
-  const [participant, setParticipant] = useState(null);
+  const storedSession = useMemo(() => {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      return null;
+    }
+  }, []);
+
+  const [page, goto] = usePage(storedSession?.page?.name || 'entry', storedSession?.page?.props || {});
+  const [organizer, setOrganizer] = useState(storedSession?.organizer || null);
+  const [participant, setParticipant] = useState(storedSession?.participant || null);
+
+  useEffect(() => {
+    const snapshot = {
+      page,
+      organizer,
+      participant,
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
+  }, [page, organizer, participant]);
+
+  function resetSessionToEntry() {
+    setOrganizer(null);
+    setParticipant(null);
+    goto('entry');
+    localStorage.removeItem(SESSION_KEY);
+  }
 
   if (page.name === 'entry') {
     return (
       <EntryPage
         onOrganizerLogin={(data) => {
           setOrganizer(data);
+          setParticipant(null);
           goto('organizer-dashboard');
         }}
         onParticipantLogin={({ participant: participantData, roomId }) => {
           setParticipant({ ...participantData, roomId });
+          setOrganizer(null);
           goto('participant-room', { roomId, participantId: participantData.id });
         }}
       />
@@ -32,10 +61,7 @@ function App() {
       <OrganizerDashboard
         organizer={organizer}
         onEnterRoom={(roomId) => goto('organizer-room', { roomId })}
-        onLogout={() => {
-          setOrganizer(null);
-          goto('entry');
-        }}
+        onLogout={resetSessionToEntry}
       />
     );
   }
@@ -58,10 +84,8 @@ function App() {
         <ParticipantRoomPage
           participant={participant}
           roomId={participant.roomId}
-          onBack={() => {
-            setParticipant(null);
-            goto('entry');
-          }}
+          onBack={() => goto('entry')}
+          onLogout={resetSessionToEntry}
         />
       </main>
     );
