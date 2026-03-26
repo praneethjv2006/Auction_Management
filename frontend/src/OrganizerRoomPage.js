@@ -23,8 +23,6 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
   const [individualPurses, setIndividualPurses] = useState({});
   const [editingParticipantId, setEditingParticipantId] = useState(null);
   const [editingParticipantPurse, setEditingParticipantPurse] = useState('');
-  const [reassignByItemId, setReassignByItemId] = useState({});
-  const [reassignWinnerByItemId, setReassignWinnerByItemId] = useState({});
   const [showItemEditModal, setShowItemEditModal] = useState(false);
   const [editingItemId, setEditingItemId] = useState(null);
   const [editingItemName, setEditingItemName] = useState('');
@@ -180,8 +178,6 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
     setShowItemsModal(false);
     setItemFilter('upcoming');
     setItemCategoryFilter('all');
-    setReassignByItemId({});
-    setReassignWinnerByItemId({});
     setShowRestartModal(false);
     setStatus('Auction restarted successfully. All items reset to upcoming.');
   }
@@ -203,46 +199,11 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
     }
   }
 
-  async function handleItemReassign(itemId) {
-    const selectedStatus = reassignByItemId[itemId] ?? 'unsold';
-
-    const payload = { status: selectedStatus };
-    if (selectedStatus === 'sold') {
-      const parsedWinnerId = Number(reassignWinnerByItemId[itemId]);
-      if (!parsedWinnerId || Number.isNaN(parsedWinnerId)) {
-        setStatus('Please select a participant for Sold.');
-        return;
-      }
-      payload.newWinnerId = parsedWinnerId;
-    } else {
-      payload.newWinnerId = null;
-    }
-
-    try {
-      await handleControl(`items/${itemId}/reassign`, payload);
-      setStatus('Item assignment updated successfully.');
-    } catch (error) {
-      setStatus(error.message);
-    }
-  }
-
   function openItemEdit(item) {
     setEditingItemId(item.id);
     setEditingItemName(item.name || '');
     setEditingItemPrice(String(item.price ?? ''));
     setEditingItemCategory(item.category || 'General');
-    setReassignByItemId((prev) => ({
-      ...prev,
-      [item.id]: item.status === 'upcoming'
-        ? 'upcoming'
-        : item.status === 'sold'
-          ? 'sold'
-          : 'unsold',
-    }));
-    setReassignWinnerByItemId((prev) => ({
-      ...prev,
-      [item.id]: item.winnerId ?? '',
-    }));
     setShowItemsModal(false);
     setShowSelectModal(false);
     setShowBoughtModal({ open: false, participant: null });
