@@ -605,7 +605,10 @@ exports.skipItem = async (req, res) => {
   }
 
   const currentItemId = room.currentItemId;
-  const nextItem = room.items.find((item) => item.status === 'upcoming');
+  const autoConfig = getAutoConfig(roomId);
+  const nextItem = autoConfig.enabled
+    ? pickRandomUpcomingItem(room.items)
+    : room.items.find((item) => item.status === 'upcoming');
 
   await prisma.$transaction([
     prisma.item.update({
@@ -650,7 +653,10 @@ exports.nextItem = async (req, res) => {
   }
 
   const currentItem = room.items.find((item) => item.id === room.currentItemId);
-  const nextItem = room.items.find((item) => item.status === 'upcoming');
+  const autoConfig = getAutoConfig(roomId);
+  const nextItem = autoConfig.enabled
+    ? pickRandomUpcomingItem(room.items)
+    : room.items.find((item) => item.status === 'upcoming');
 
   const updates = [];
 
@@ -727,26 +733,8 @@ exports.configureAutoAuction = async (req, res) => {
     }
     autoConfigByRoom.set(roomId, { enabled: true, bidWindowSeconds: parsedWindow });
 
-    if (!room.currentItemId && room.status !== 'live') {
-      const nextItem = pickRandomUpcomingItem(room.items);
-      if (nextItem) {
-        await prisma.$transaction([
-          prisma.auctionRoom.update({
-            where: { id: roomId },
-            data: {
-              status: 'live',
-              currentItemId: nextItem.id,
-            },
-          }),
-          prisma.item.update({
-            where: { id: nextItem.id },
-            data: { status: 'ongoing' },
-          }),
-        ]);
-        clearSkipVotes(roomId);
-      }
-    }
-
+    // Do not auto-pick the first item on enable.
+    // The organizer must explicitly trigger the first random item.
     await startAutoTimer(roomId);
   } else {
     autoConfigByRoom.set(roomId, { enabled: false, bidWindowSeconds: 0 });
@@ -755,6 +743,61 @@ exports.configureAutoAuction = async (req, res) => {
   }
 
   const updatedRoom = await getRoomSnapshot(roomId);
+  return res.json(withAutoMeta(updatedRoom));
+};
+
+exports.startAutoFirstItem = async (req, res) => {
+  const roomId = Number(req.params.roomId);
+  if (Number.isNaN(roomId)) {
+    return res.status(400).json({ error: 'Invalid room id' });
+  }
+
+  const config = getAutoConfig(roomId);
+  if (!config.enabled) {
+    return res.status(400).json({ error: 'Automatic auction is not enabled' });
+  }
+
+  const room = await prisma.auctionRoom.findUnique({
+    where: { id: roomId },
+    include: { items: { orderBy: { id: 'asc' } } },
+  });
+
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+
+  if (room.status === 'ended') {
+    return res.status(400).json({ error: 'Cannot start automatic auction on an ended room. Restart the auction first.' });
+  }
+
+  if (room.status !== 'live') {
+    return res.status(400).json({ error: 'Start the auction first' });
+  }
+
+  if (room.currentItemId) {
+    return res.status(400).json({ error: 'A current item is already active' });
+  }
+
+  const nextItem = pickRandomUpcomingItem(room.items);
+  if (!nextItem) {
+    return res.status(400).json({ error: 'No upcoming items available' });
+  }
+
+  await prisma.$transaction([
+    prisma.auctionRoom.update({
+      where: { id: roomId },
+      data: { currentItemId: nextItem.id, status: 'live' },
+    }),
+    prisma.item.update({
+      where: { id: nextItem.id },
+      data: { status: 'ongoing' },
+    }),
+  ]);
+
+  clearSkipVotes(roomId);
+  await startAutoTimer(roomId);
+  const updatedRoom = await getRoomSnapshot(roomId);
+  await emitRoomUpdate(roomId);
   return res.json(withAutoMeta(updatedRoom));
 };
 

@@ -248,12 +248,20 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
   const timerLeft = room.autoAuction?.enabled && room.autoAuction?.deadlineTs
     ? Math.max(0, Math.ceil((room.autoAuction.deadlineTs - nowTs) / 1000))
     : null;
-  const itemCategories = room.categories?.length
-    ? room.categories.map((entry) => entry.name)
-    : Array.from(new Set(room.items.map((item) => item.category || 'General')));
-  const editCategoryOptions = room.categories?.length
-    ? room.categories.map((entry) => entry.name)
-    : itemCategories;
+  const categoriesFromItems = Array.from(
+    new Set(
+      room.items
+        .map((item) => String(item.category || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const categoriesFromRoom = Array.isArray(room.categories)
+    ? room.categories
+        .map((entry) => String(entry.name || '').trim())
+        .filter(Boolean)
+    : [];
+  const itemCategories = Array.from(new Set([...categoriesFromItems, ...categoriesFromRoom])).sort((a, b) => a.localeCompare(b));
+  const editCategoryOptions = itemCategories;
   const filteredItems = room.items.filter((item) => {
     const statusMatch = itemFilter === 'all' || item.status === itemFilter;
     const categoryMatch = itemCategoryFilter === 'all' || (item.category || 'General') === itemCategoryFilter;
@@ -410,7 +418,11 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
             </div>
           </div>
         ) : (
-          <p>Waiting for next item. Select an upcoming item to begin bidding.</p>
+          <p>
+            {room.autoAuction?.enabled
+              ? 'Waiting for first item. Click "Give First Player" to start.'
+              : 'Waiting for next item. Select an upcoming item to begin bidding.'}
+          </p>
         )}
 
         {/* Select next item button and modal */}
@@ -422,6 +434,17 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
             onClick={() => setShowSelectModal(true)}
           >
             Select next item
+          </button>
+        )}
+
+        {room.autoAuction?.enabled && !currentItem && room.status === 'live' && upcomingItems.length > 0 && (
+          <button
+            type="button"
+            className="ghost-button"
+            style={{ marginTop: 16 }}
+            onClick={() => handleControl('auto/first')}
+          >
+            Give First Player
           </button>
         )}
         {showSelectModal && (

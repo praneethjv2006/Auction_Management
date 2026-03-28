@@ -187,9 +187,19 @@ export default function ParticipantRoomPage({ participant, roomId, onBack, onLog
   const timerLeft = room.autoAuction?.enabled && room.autoAuction?.deadlineTs
     ? Math.max(0, Math.ceil((room.autoAuction.deadlineTs - nowTs) / 1000))
     : null;
-  const itemCategories = room.categories?.length
-    ? room.categories.map((entry) => entry.name)
-    : Array.from(new Set(room.items.map((item) => item.category || 'General')));
+  const categoriesFromItems = Array.from(
+    new Set(
+      room.items
+        .map((item) => String(item.category || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const categoriesFromRoom = Array.isArray(room.categories)
+    ? room.categories
+        .map((entry) => String(entry.name || '').trim())
+        .filter(Boolean)
+    : [];
+  const itemCategories = Array.from(new Set([...categoriesFromItems, ...categoriesFromRoom])).sort((a, b) => a.localeCompare(b));
   const filteredItems = room.items.filter((item) => {
     const statusMatch = itemFilter === 'all' || item.status === itemFilter;
     const categoryMatch = itemCategoryFilter === 'all' || (item.category || 'General') === itemCategoryFilter;

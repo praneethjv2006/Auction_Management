@@ -301,6 +301,21 @@ export default function OrganizerDashboard({ organizer, onEnterRoom, onLogout })
   }
 
   const selectedRoomCategories = selectedRoom?.categories || [];
+  const selectedRoomItemCategoryNames = selectedRoom
+    ? Array.from(
+        new Set(
+          selectedRoom.items
+            .map((item) => String(item.category || '').trim())
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b))
+    : [];
+  const selectedRoomCategoryNames = Array.from(
+    new Set([
+      ...selectedRoomCategories.map((category) => String(category.name || '').trim()).filter(Boolean),
+      ...selectedRoomItemCategoryNames,
+    ])
+  ).sort((a, b) => a.localeCompare(b));
   const filteredSelectedItems = selectedRoom
     ? selectedRoom.items.filter((item) => (
       dashboardItemCategoryFilter === 'all' || (item.category || 'General') === dashboardItemCategoryFilter
@@ -531,8 +546,8 @@ export default function OrganizerDashboard({ organizer, onEnterRoom, onLogout })
                       onChange={(event) => setDashboardItemCategoryFilter(event.target.value)}
                     >
                       <option value="all">All Categories</option>
-                      {selectedRoomCategories.map((category) => (
-                        <option key={category.id} value={category.name}>{category.name}</option>
+                      {selectedRoomCategoryNames.map((categoryName) => (
+                        <option key={categoryName} value={categoryName}>{categoryName}</option>
                       ))}
                     </select>
                   </div>
