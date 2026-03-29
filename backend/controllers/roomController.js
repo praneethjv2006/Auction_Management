@@ -3,6 +3,7 @@ const { getIo } = require('../lib/socketStore');
 const { ensureDefaultOrganizer } = require('./organizerController');
 const { AuctionSystem } = require('../models/singleton');
 const { AuctionFactory } = require('../models/factory');
+const { generateTeamScores } = require('../lib/gemini');
 
 const auctionSystem = AuctionSystem.getInstance();
 const autoConfigByRoom = auctionSystem.autoConfigByRoom;
@@ -10,6 +11,7 @@ const autoTimerByRoom = auctionSystem.autoTimerByRoom;
 const autoDeadlineByRoom = auctionSystem.autoDeadlineByRoom;
 const boughtOrderByRoom = auctionSystem.boughtOrderByRoom;
 const skipVotesByRoom = auctionSystem.skipVotesByRoom;
+const teamScoresByRoom = auctionSystem.teamScoresByRoom;
 
 function getAutoConfig(roomId) {
   return autoConfigByRoom.get(roomId) || { enabled: false, bidWindowSeconds: 0 };
@@ -27,6 +29,10 @@ function getAutoMeta(roomId) {
     timeLeftSeconds,
     deadlineTs: deadline,
   };
+}
+
+function getTeamScores(roomId) {
+  return teamScoresByRoom.get(roomId) || null;
 }
 
 function getBoughtOrderState(roomId) {
@@ -77,6 +83,7 @@ function withAutoMeta(room) {
   return {
     ...roomWithOrder,
     autoAuction: getAutoMeta(room.id),
+    teamScores: getTeamScores(room.id),
     boughtItemOrderByParticipant: getBoughtOrderState(room.id),
     skipState: {
       itemId: skipState ? skipState.itemId : null,
@@ -91,6 +98,12 @@ function withAutoMeta(room) {
 function clearSkipVotes(roomId) {
   if (skipVotesByRoom.has(roomId)) {
     skipVotesByRoom.delete(roomId);
+  }
+}
+
+function clearTeamScores(roomId) {
+  if (teamScoresByRoom.has(roomId)) {
+    teamScoresByRoom.delete(roomId);
   }
 }
 
@@ -581,6 +594,7 @@ exports.endAuction = async (req, res) => {
   await prisma.$transaction(updates);
   clearAutoTimer(roomId);
   clearSkipVotes(roomId);
+  clearTeamScores(roomId);
   if (boughtOrderByRoom.has(roomId)) {
     boughtOrderByRoom.delete(roomId);
   }
@@ -801,6 +815,65 @@ exports.startAutoFirstItem = async (req, res) => {
   return res.json(withAutoMeta(updatedRoom));
 };
 
+exports.calculateTeamScores = async (req, res) => {
+  const roomId = Number(req.params.roomId);
+  if (Number.isNaN(roomId)) {
+    return res.status(400).json({ error: 'Invalid room id' });
+  }
+
+  const room = await getRoomSnapshot(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+
+  if (room.status !== 'ended') {
+    return res.status(400).json({ error: 'Scores can be calculated only after the auction ends' });
+  }
+
+  const teams = room.participants.map((participant) => {
+    const winningItems = participant.winningItems || [];
+    const mainXI = winningItems.slice(0, 11).map((item) => ({
+      name: item.name,
+      category: item.category,
+      price: item.price,
+    }));
+
+    return {
+      participantId: participant.id,
+      teamName: participant.name,
+      mainXI,
+    };
+  });
+
+  const hasAnyPlayers = teams.some((team) => team.mainXI.length > 0);
+  if (!hasAnyPlayers) {
+    return res.status(400).json({ error: 'No players available to score' });
+  }
+
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    const result = await generateTeamScores({
+      apiKey,
+      model: process.env.GEMINI_MODEL,
+      teams,
+    });
+
+    const parsedTeams = Array.isArray(result.parsed?.teams) ? result.parsed.teams : [];
+
+    teamScoresByRoom.set(roomId, {
+      generatedAt: new Date().toISOString(),
+      model: result.model,
+      teams: parsedTeams,
+    });
+
+    await emitRoomUpdate(roomId);
+    const updatedRoom = await getRoomSnapshot(roomId);
+    return res.json(withAutoMeta(updatedRoom));
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to calculate team scores' });
+  }
+};
+
 exports.restartAuction = async (req, res) => {
   const roomId = Number(req.params.roomId);
   const mode = String(req.body.mode || 'same');
@@ -876,6 +949,7 @@ exports.restartAuction = async (req, res) => {
 
   clearAutoTimer(roomId);
   clearSkipVotes(roomId);
+  clearTeamScores(roomId);
   autoConfigByRoom.set(roomId, { enabled: false, bidWindowSeconds: 0 });
   if (boughtOrderByRoom.has(roomId)) {
     boughtOrderByRoom.delete(roomId);

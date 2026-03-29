@@ -11,6 +11,7 @@ class AuctionSystem {
     this.autoDeadlineByRoom = new Map();
     this.boughtOrderByRoom = new Map();
     this.skipVotesByRoom = new Map();
+    this.teamScoresByRoom = new Map();
 
     this.rooms = new Map();
     this.users = new Map();

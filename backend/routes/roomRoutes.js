@@ -22,6 +22,7 @@ router.post('/:roomId/select-item', roomController.selectItem);
 router.post('/:roomId/stop-item', roomController.stopCurrentItem);
 router.post('/:roomId/auto', roomController.configureAutoAuction);
 router.post('/:roomId/auto/first', roomController.startAutoFirstItem);
+router.post('/:roomId/scores/calculate', roomController.calculateTeamScores);
 router.post('/:roomId/restart', roomController.restartAuction);
 router.post('/:roomId/previous', roomController.previousItem);
 router.post('/:roomId/end', roomController.endAuction);

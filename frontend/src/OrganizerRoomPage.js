@@ -821,12 +821,30 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
       {room.status === 'ended' ? (
         <section className="panel">
           <h3>Auction Result: Items Bought by Participants</h3>
+          <div className="control-buttons" style={{ marginBottom: 12 }}>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await handleControl('scores/calculate');
+                  setStatus('Team scores calculated.');
+                } catch (error) {
+                  setStatus(error.message);
+                }
+              }}
+            >
+              Calculate Score
+            </button>
+          </div>
           <div className="participant-grid">
             {room.participants.map((participant, teamIndex) => {
               const orderedItems = getOrderedBoughtItems(participant);
               const mainItems = orderedItems.slice(0, 11);
               const substituteItems = orderedItems.slice(11);
               const captainItemId = captainByParticipantId[participant.id] ?? '';
+              const teamScoreEntry = Array.isArray(room.teamScores?.teams)
+                ? room.teamScores.teams.find((entry) => Number(entry.participantId) === Number(participant.id))
+                : null;
 
               return (
                 <div key={participant.id} className={`info-card participant-card ended-participant-card team-variant-${teamIndex % 5}`}>
@@ -834,6 +852,24 @@ export default function OrganizerRoomPage({ roomId, organizer, onBack }) {
                     <strong>{participant.name}</strong>
                     <span className="muted-text">Total: {orderedItems.length}</span>
                   </div>
+
+                  {teamScoreEntry ? (
+                    <div className="status-banner" style={{ marginTop: 10 }}>
+                      <strong>Score: {teamScoreEntry.score}/100</strong>
+                      {teamScoreEntry.summary ? <div style={{ marginTop: 6 }}>{teamScoreEntry.summary}</div> : null}
+                      {Array.isArray(teamScoreEntry.strengths) && teamScoreEntry.strengths.length ? (
+                        <div style={{ marginTop: 6 }}>
+                          <strong>Strengths:</strong> {teamScoreEntry.strengths.join(' • ')}
+                        </div>
+                      ) : null}
+                      {Array.isArray(teamScoreEntry.risks) && teamScoreEntry.risks.length ? (
+                        <div style={{ marginTop: 6 }}>
+                          <strong>Risks:</strong> {teamScoreEntry.risks.join(' • ')}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   {orderedItems.length ? (
                     <>
                       <div className="results-team-header" style={{ marginBottom: 10 }}>

@@ -364,6 +364,31 @@ export default function ParticipantRoomPage({ participant, roomId, onBack, onLog
       ) : (
         <section className="panel">
           <h3 className="results-title">Final Results</h3>
+
+          {Array.isArray(room.teamScores?.teams) && room.teamScores.teams.length ? (
+            <div className="status-banner" style={{ marginBottom: 14 }}>
+              <strong>Team Scores (out of 100)</strong>
+              <div className="info-list" style={{ marginTop: 10 }}>
+                {room.teamScores.teams.map((team) => (
+                  <div key={String(team.participantId)} className="info-card" style={{ marginBottom: 10 }}>
+                    <strong>{team.teamName || `Team ${team.participantId}`}: {team.score}/100</strong>
+                    {team.summary ? <div className="muted-text" style={{ marginTop: 6 }}>{team.summary}</div> : null}
+                    {Array.isArray(team.strengths) && team.strengths.length ? (
+                      <div style={{ marginTop: 6 }}>
+                        <strong>Strengths:</strong> {team.strengths.join(' • ')}
+                      </div>
+                    ) : null}
+                    {Array.isArray(team.risks) && team.risks.length ? (
+                      <div style={{ marginTop: 6 }}>
+                        <strong>Risks:</strong> {team.risks.join(' • ')}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div className="participant-grid">
             {room.participants.map((p, teamIndex) => {
               const isSelf = p.id === participant.id;
